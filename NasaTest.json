@@ -1,74 +1,93 @@
 {
-    "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
-    "contentVersion": "1.0.0.0",
-    "parameters": {
-        "workspace": {
-            "type": "String"
-        }
+  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+  "contentVersion": "1.0.0.0",
+  "parameters": {
+    "workspace": {
+      "type": "String"
     },
-    "resources": [
-        {
-            "id": "[concat(resourceId('Microsoft.OperationalInsights/workspaces/providers', parameters('workspace'), 'Microsoft.SecurityInsights'),'/alertRules/39a2d6ed-98d2-460f-a769-f7bb787079a5')]",
-            "name": "[concat(parameters('workspace'),'/Microsoft.SecurityInsights/39a2d6ed-98d2-460f-a769-f7bb787079a5')]",
-            "type": "Microsoft.OperationalInsights/workspaces/providers/alertRules",
-            "kind": "Scheduled",
-            "apiVersion": "2021-09-01-preview",
-            "properties": {
-                "displayName": "NASA TEST AD permission changes",
-                "description": "This rule monitors Active Directory permissions changes on different object levels. Based on the object and classifications, it sets different alert severity levels and descriptions.",
-                "severity": "High",
-                "enabled": true,
-                "query": "let ADObjectTypes = datatable (ObjectClass:string, Severity:string, UIText:string)\r\n    [\"domainDNS\", \"High\",\"root domain\",\r\n     \"user\",  \"Low\",\"User\",\r\n     \"group\", \"Low\",\"Group\",\r\n     \"groupPolicyContainer\", \"Medium\",\" Group Policy Object\",\r\n     \"organizationalUnit\", \"Medium\",\"Organizational Unit\",\r\n     \"container\", \"Medium\",\"Built-in Container\",\r\n     ];\r\nlet CriticalADGroups = dynamic ([\"Enterprise Admins\",\"Domain Admins\",\"Schema Admins\",\"Protected Users\",\"DnsAdmins\"]);\r\nlet CriticalContainers = dynamic ([\"AdminSDHolder\"]);\r\nSecurityEvent\r\n| where EventID == 5136\r\n| extend MyData = tostring(parse_xml(EventData))\r\n| extend Object = extractjson(\"$['EventData']['Data'][8]#text\", MyData)\r\n| extend ObjectClass = extractjson(\"$['EventData']['Data'][10]#text\", MyData)\r\n| extend OperationType = iif(extractjson(\"$['EventData']['Data'][14]#text\", MyData) == \"%%14674\",\"Value Added\",\"Value Deleted\")\r\n| parse Object with * \"CN=\" GroupName \",\" *\r\n| parse Object with * \"OU=\" OUName \",\" *\r\n| where OperationType == \"Value Added\"\r\n| join kind = inner ADObjectTypes on ObjectClass\r\n| extend CriticalGroupChange = (GroupName has_any (CriticalADGroups))\r\n| extend CriticalContainerChange = (GroupName has_any (CriticalContainers))\r\n| extend Severity = iif(CriticalGroupChange == \"true\",\"High\",Severity)\r\n| extend Severity = iif(CriticalContainerChange == \"true\",\"High\",Severity)\r\n| project TimeGenerated,ObjectClass,Severity,Account,Object,OperationType,GroupName,CriticalGroupChange,CriticalContainerChange,UIText,OUName",
-                "queryFrequency": "PT5M",
-                "queryPeriod": "PT5M",
-                "triggerOperator": "GreaterThan",
-                "triggerThreshold": 0,
-                "suppressionDuration": "PT5H",
-                "suppressionEnabled": false,
-                "tactics": [
-                    "LateralMovement",
-                    "Discovery"
-                ],
-                "techniques": [],
-                "alertRuleTemplateName": null,
-                "incidentConfiguration": {
-                    "createIncident": true,
-                    "groupingConfiguration": {
-                        "enabled": false,
-                        "reopenClosedIncident": false,
-                        "lookbackDuration": "PT5H",
-                        "matchingMethod": "AllEntities",
-                        "groupByEntities": [],
-                        "groupByAlertDetails": [],
-                        "groupByCustomDetails": []
-                    }
-                },
-                "eventGroupingSettings": {
-                    "aggregationKind": "SingleAlert"
-                },
-                "alertDetailsOverride": {
-                    "alertDisplayNameFormat": "User {{Account}} changed permissions on {{UIText}} level",
-                    "alertDescriptionFormat": "{{Account}} modified {{Object}}. This object is marked as {{Severity}}.",
-                    "alertTacticsColumnName": null,
-                    "alertSeverityColumnName": "Severity"
-                },
-                "customDetails": {
-                    "OperationType": "OperationType",
-                    "ObjectClass": "ObjectClass",
-                    "Object": "Object"
-                },
-                "entityMappings": [
-                    {
-                        "entityType": "Account",
-                        "fieldMappings": [
-                            {
-                                "identifier": "Name",
-                                "columnName": "Account"
-                            }
-                        ]
-                    }
-                ]
-            }
-        }
-    ]
+    "analytic-id": {
+      "type": "string",
+      "defaultValue": "835a2032-8b67-4e89-a5c6-2d3c04526a70",
+      "minLength": 1,
+      "metadata": {
+        "description": "Unique id for the scheduled alert rule"
+      }
+    }
+  },
+  "resources": [
+    {
+      "type": "Microsoft.OperationalInsights/workspaces/providers/alertRules",
+      "name": "[concat(parameters('workspace'),'/Microsoft.SecurityInsights/',parameters('analytic-id'))]",
+      "apiVersion": "2020-01-01",
+      "kind": "Scheduled",
+      "location": "[resourceGroup().location]",
+      "properties": {
+        "description": "Identifies a list of IP addresses with a minimum number(defualt of 5) of failed logon attempts to Azure Active Directory.\nUses that list to identify any successful AWS Console logons from these IPs within the same timeframe.",
+        "displayName": "NASA TEST Failed AzureAD logons but success logon to AWS Console",
+        "enabled": true,
+        "query": "\n//Adjust this threshold to fit your environment\nlet signin_threshold = 5; \n//Make a list of IPs with AAD signin failures above our threshold\nlet aadFunc = (tableName:string){\nlet Suspicious_signins = \ntable(tableName)\n| where ResultType !in (\"0\", \"50125\", \"50140\")\n| where IPAddress !in (\"127.0.0.1\", \"::1\")\n| summarize count() by IPAddress\n| where count_ >  signin_threshold\n| summarize make_set(IPAddress);\nSuspicious_signins\n};\nlet aadSignin = aadFunc(\"SigninLogs\");\nlet aadNonInt = aadFunc(\"AADNonInteractiveUserSignInLogs\");\nlet Suspicious_signins = \nunion isfuzzy=true aadSignin, aadNonInt\n| summarize make_set(set_IPAddress);\n//See if any of those IPs have sucessfully logged into the AWS console\nAWSCloudTrail\n| where EventName =~ \"ConsoleLogin\"\n| extend LoginResult = tostring(parse_json(ResponseElements).ConsoleLogin) \n| where LoginResult =~ \"Success\"\n| where SourceIpAddress in (Suspicious_signins)\n| extend Reason = \"Multiple failed AAD logins from IP address\"\n| extend MFAUsed = tostring(parse_json(AdditionalEventData).MFAUsed)\n| extend User = iif(isempty(UserIdentityUserName), UserIdentityType, UserIdentityUserName) \n| summarize StartTimeUtc = min(TimeGenerated), EndTimeUtc = max(TimeGenerated) by Reason, LoginResult, EventTypeName, UserIdentityType, User, AWSRegion, SourceIpAddress, UserAgent, MFAUsed\n| extend timestamp = StartTimeUtc, AccountCustomEntity = User, IPCustomEntity = SourceIpAddress\n",
+        "queryFrequency": "P1D",
+        "queryPeriod": "P1D",
+        "severity": "Medium",
+        "suppressionDuration": "PT1H",
+        "suppressionEnabled": false,
+        "triggerOperator": "GreaterThan",
+        "triggerThreshold": 0,
+        "alertRuleTemplateName": "643c2025-9604-47c5-833f-7b4b9378a1f5",
+        "tags": null,
+        "entityMappings": [
+          {
+            "fieldMappings": [
+              {
+                "identifier": "FullName",
+                "columnName": "AccountCustomEntity"
+              }
+            ],
+            "entityType": "Account"
+          },
+          {
+            "fieldMappings": [
+              {
+                "identifier": "Address",
+                "columnName": "IPCustomEntity"
+              }
+            ],
+            "entityType": "IP"
+          }
+        ],
+        "techniques": [
+          "T1078",
+          "T1110"
+        ],
+        "tactics": [
+          "InitialAccess",
+          "CredentialAccess"
+        ],
+        "requiredDataConnectors": [
+          {
+            "connectorId": "AzureActiveDirectory",
+            "dataTypes": [
+              "SigninLogs"
+            ]
+          },
+          {
+            "connectorId": "AzureActiveDirectory",
+            "dataTypes": [
+              "AADNonInteractiveUserSignInLogs"
+            ]
+          },
+          {
+            "connectorId": "AWS",
+            "dataTypes": [
+              "AWSCloudTrail"
+            ]
+          }
+        ],
+        "incidentConfiguration": null,
+        "eventGroupingSettings": null,
+        "customDetails": null,
+        "alertDetailsOverride": null
+      }
+    }
+  ]
 }
